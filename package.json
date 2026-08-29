@@ -5,8 +5,7 @@
   "main": "api/index.js",
   "scripts": {
     "start": "node api/index.js",
-    "dev": "node --watch server.js",
-    "vercel-build": "echo Hello"
+    "dev": "node --watch server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

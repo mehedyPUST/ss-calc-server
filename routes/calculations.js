@@ -22,24 +22,76 @@ async function purgeExpiredTrash() {
   return result.deletedCount || 0;
 }
 
-// POST /api/calculations — save a new calculation
+// POST /api/calculations
 router.post("/", async (req, res) => {
   try {
     const { busVoltages, feeders, bottail11kV, totalMW, note, action, ids } = req.body;
 
     // Handle bulk operations
     if (action && Array.isArray(ids)) {
-      return handleBulk(req, res);
-    }
+      const uniqueIds = [...new Set((ids || []).filter(Boolean).map(String))];
 
-    // Handle empty trash
-    if (action === "empty_trash") {
+      if (uniqueIds.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "No items selected",
+        });
+      }
+
       await purgeExpiredTrash();
-      const result = await Calculation.deleteMany(trashFilter);
-      return res.json({
-        success: true,
-        message: "Trash emptied",
-        deleted: result.deletedCount,
+
+      if (action === "trash") {
+        const result = await Calculation.updateMany(
+          {
+            _id: { $in: uniqueIds },
+            $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
+          },
+          { $set: { deletedAt: new Date() } }
+        );
+        return res.json({
+          success: true,
+          message: "Moved to trash",
+          modified: result.modifiedCount,
+        });
+      }
+
+      if (action === "restore") {
+        const result = await Calculation.updateMany(
+          { _id: { $in: uniqueIds }, deletedAt: { $ne: null } },
+          { $set: { deletedAt: null } }
+        );
+        return res.json({
+          success: true,
+          message: "Restored to history",
+          modified: result.modifiedCount,
+        });
+      }
+
+      if (action === "purge") {
+        const result = await Calculation.deleteMany({
+          _id: { $in: uniqueIds },
+          deletedAt: { $ne: null },
+        });
+        return res.json({
+          success: true,
+          message: "Permanently deleted",
+          deleted: result.deletedCount,
+        });
+      }
+
+      if (action === "empty_trash") {
+        await purgeExpiredTrash();
+        const result = await Calculation.deleteMany(trashFilter);
+        return res.json({
+          success: true,
+          message: "Trash emptied",
+          deleted: result.deletedCount,
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: "Unknown action",
       });
     }
 
@@ -84,7 +136,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-// GET /api/calculations — list calculations with trash support
+// GET /api/calculations
 router.get("/", async (req, res) => {
   try {
     await purgeExpiredTrash();
@@ -139,7 +191,7 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// DELETE /api/calculations/:id - Soft delete or permanent delete
+// DELETE /api/calculations/:id
 router.delete("/:id", async (req, res) => {
   try {
     await purgeExpiredTrash();
@@ -147,7 +199,6 @@ router.delete("/:id", async (req, res) => {
     const permanent = req.query.permanent === "1" || req.query.permanent === "true";
 
     if (permanent) {
-      // Only allow permanent deletion of items in trash
       const doc = await Calculation.findOneAndDelete({
         _id: id,
         deletedAt: { $ne: null },
@@ -157,7 +208,7 @@ router.delete("/:id", async (req, res) => {
         if (exists) {
           return res.status(400).json({
             success: false,
-            message: "Item is in History. Move to Trash first before permanent deletion.",
+            message: "Item is in History. Move to Trash first.",
           });
         }
         return res.status(404).json({
@@ -171,7 +222,6 @@ router.delete("/:id", async (req, res) => {
       });
     }
 
-    // Soft delete - move to trash
     const doc = await Calculation.findOneAndUpdate(
       {
         _id: id,
@@ -203,7 +253,7 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// PATCH /api/calculations/:id - Restore from trash
+// PATCH /api/calculations/:id - Restore
 router.patch("/:id", async (req, res) => {
   try {
     await purgeExpiredTrash();
@@ -244,73 +294,5 @@ router.patch("/:id", async (req, res) => {
     });
   }
 });
-
-// Bulk operations handler
-async function handleBulk(req, res) {
-  try {
-    const { action, ids } = req.body;
-    const uniqueIds = [...new Set((ids || []).filter(Boolean).map(String))];
-
-    if (uniqueIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "No items selected",
-      });
-    }
-
-    await purgeExpiredTrash();
-
-    if (action === "trash") {
-      const result = await Calculation.updateMany(
-        {
-          _id: { $in: uniqueIds },
-          $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
-        },
-        { $set: { deletedAt: new Date() } }
-      );
-      return res.json({
-        success: true,
-        message: "Moved to trash",
-        modified: result.modifiedCount,
-      });
-    }
-
-    if (action === "restore") {
-      const result = await Calculation.updateMany(
-        { _id: { $in: uniqueIds }, deletedAt: { $ne: null } },
-        { $set: { deletedAt: null } }
-      );
-      return res.json({
-        success: true,
-        message: "Restored to history",
-        modified: result.modifiedCount,
-      });
-    }
-
-    if (action === "purge") {
-      const result = await Calculation.deleteMany({
-        _id: { $in: uniqueIds },
-        deletedAt: { $ne: null },
-      });
-      return res.json({
-        success: true,
-        message: "Permanently deleted",
-        deleted: result.deletedCount,
-      });
-    }
-
-    return res.status(400).json({
-      success: false,
-      message: "Unknown action. Use 'trash', 'restore', or 'purge'",
-    });
-  } catch (err) {
-    console.error("Bulk error:", err);
-    return res.status(500).json({
-      success: false,
-      message: "Bulk action failed",
-      error: err.message,
-    });
-  }
-}
 
 module.exports = router;
