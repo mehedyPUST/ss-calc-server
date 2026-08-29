@@ -1,5 +1,7 @@
+// backend/routes/calculations.js
 const express = require("express");
 const Calculation = require("../models/Calculation");
+const { requireAuth, requireAdmin, optionalAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -22,8 +24,8 @@ async function purgeExpiredTrash() {
   return result.deletedCount || 0;
 }
 
-// POST /api/calculations
-router.post("/", async (req, res) => {
+// POST /api/calculations - Requires authentication
+router.post("/", requireAuth, async (req, res) => {
   try {
     const { busVoltages, feeders, bottail11kV, totalMW, note, action, ids } = req.body;
 
@@ -119,6 +121,7 @@ router.post("/", async (req, res) => {
       note: note || "",
       calculatedAt: new Date(),
       deletedAt: null,
+      createdBy: req.adminId, // Track who created this
     });
 
     res.status(201).json({
@@ -136,8 +139,8 @@ router.post("/", async (req, res) => {
   }
 });
 
-// GET /api/calculations
-router.get("/", async (req, res) => {
+// GET /api/calculations - Optional auth (view without login for read-only)
+router.get("/", optionalAuth, async (req, res) => {
   try {
     await purgeExpiredTrash();
 
@@ -162,6 +165,7 @@ router.get("/", async (req, res) => {
       trashCount,
       trash,
       data: docs,
+      isAuthenticated: !!req.admin,
     });
   } catch (err) {
     console.error("Fetch error:", err);
@@ -173,8 +177,8 @@ router.get("/", async (req, res) => {
   }
 });
 
-// GET /api/calculations/:id
-router.get("/:id", async (req, res) => {
+// GET /api/calculations/:id - Optional auth
+router.get("/:id", optionalAuth, async (req, res) => {
   try {
     await purgeExpiredTrash();
     const doc = await Calculation.findById(req.params.id).lean();
@@ -191,8 +195,8 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// DELETE /api/calculations/:id
-router.delete("/:id", async (req, res) => {
+// DELETE /api/calculations/:id - Requires authentication
+router.delete("/:id", requireAuth, async (req, res) => {
   try {
     await purgeExpiredTrash();
     const { id } = req.params;
@@ -253,8 +257,8 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// PATCH /api/calculations/:id - Restore
-router.patch("/:id", async (req, res) => {
+// PATCH /api/calculations/:id - Requires authentication
+router.patch("/:id", requireAuth, async (req, res) => {
   try {
     await purgeExpiredTrash();
     const { id } = req.params;

@@ -1,24 +1,31 @@
 // backend/api/index.js
 const express = require("express");
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
 const mongoose = require("mongoose");
 const calculationsRouter = require("../routes/calculations");
+const authRouter = require("../routes/auth");
 
 const app = express();
 
 // CORS configuration
 app.use(
     cors({
-        origin: "*", // Allow all origins (or specify your frontend URL)
+        origin: [
+            "http://localhost:3000",
+            "http://localhost:3001",
+            "https://your-frontend-domain.vercel.app",
+        ],
+        credentials: true,
         methods: ["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
         allowedHeaders: ["Content-Type", "Authorization"],
-        credentials: true,
     })
 );
 
+app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));
 
-// MongoDB connection helper
+// MongoDB connection
 let cached = global.mongoose;
 
 if (!cached) {
@@ -60,7 +67,10 @@ app.get("/api/health", async (req, res) => {
     }
 });
 
-// Routes - connect DB before handling
+// Auth routes (no auth required for login/register)
+app.use("/api/auth", authRouter);
+
+// Calculation routes with auth
 app.use("/api/calculations", async (req, res, next) => {
     try {
         await connectDB();
@@ -93,5 +103,4 @@ app.use((err, req, res, next) => {
     });
 });
 
-// Export for Vercel
 module.exports = app;

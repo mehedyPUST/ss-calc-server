@@ -1,3 +1,4 @@
+// backend/models/Calculation.js
 const mongoose = require("mongoose");
 
 const feederSchema = new mongoose.Schema(
@@ -23,12 +24,18 @@ const calculationSchema = new mongoose.Schema(
     calculatedAt: { type: Date, default: Date.now },
     note: { type: String, default: "" },
     deletedAt: { type: Date, default: null },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Admin",
+      default: null,
+    },
   },
   { timestamps: true }
 );
 
-// Index for efficient trash queries
+// Indexes
 calculationSchema.index({ deletedAt: 1, createdAt: -1 });
-calculationSchema.index({ deletedAt: 1 }); // For trash count queries
+calculationSchema.index({ deletedAt: 1 });
+calculationSchema.index({ createdBy: 1 });
 
 module.exports = mongoose.model("Calculation", calculationSchema);
