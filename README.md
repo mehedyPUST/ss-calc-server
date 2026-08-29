@@ -1,20 +1,26 @@
-# Optional standalone Express backend
+# Load Calculator API (Express)
 
-The main app uses **Next.js API routes** (`/api/*`) for Vercel deployment.
-
-This Express server is optional for local development if you prefer a separate process:
+## Local
 
 ```bash
-cd backend
 npm install
-cp .env.example .env   # MONGODB_URI
-npm run dev            # port 5000
+cp .env.example .env
+# set MONGODB_URI, JWT_SECRET, FRONTEND_URL
+npm run dev
 ```
 
-Then in the Next app `.env.local`:
+First admin: `POST /api/auth/register` with `{ "username", "password", "email?" }`  
+(no secret needed when zero admins exist)
 
-```
-NEXT_PUBLIC_API_URL=http://localhost:5000
-```
+## Vercel
 
-On Vercel, leave `NEXT_PUBLIC_API_URL` unset so the app uses same-origin `/api`.
+1. Deploy this folder as a separate Vercel project
+2. Environment variables:
+   - `MONGODB_URI`
+   - `JWT_SECRET`
+   - `ADMIN_REGISTRATION_SECRET` (optional)
+   - `FRONTEND_URL` = `https://your-frontend.vercel.app` (comma-separated if multiple)
+   - `NODE_ENV=production`
+3. Set frontend `NEXT_PUBLIC_API_URL` to this API URL (e.g. `https://your-api.vercel.app`)
+
+Login returns a JWT in the JSON body; the frontend stores it and sends `Authorization: Bearer …` so auth works across domains.

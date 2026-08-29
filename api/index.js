@@ -1,4 +1,4 @@
-// backend/api/index.js
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
@@ -8,99 +8,113 @@ const authRouter = require("../routes/auth");
 
 const app = express();
 
-// CORS configuration
+function getAllowedOrigins() {
+  const list = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+  ];
+  if (process.env.FRONTEND_URL) {
+    process.env.FRONTEND_URL.split(",").forEach((o) => {
+      const t = o.trim();
+      if (t) list.push(t);
+    });
+  }
+  return list;
+}
+
 app.use(
-    cors({
-        origin: [
-            "http://localhost:3000",
-            "http://localhost:3001",
-            "https://your-frontend-domain.vercel.app",
-        ],
-        credentials: true,
-        methods: ["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "Authorization"],
-    })
+  cors({
+    origin(origin, cb) {
+      const allowed = getAllowedOrigins();
+      // Allow non-browser / same-origin tools (no Origin header)
+      if (!origin || allowed.includes(origin)) {
+        return cb(null, true);
+      }
+      console.warn("CORS blocked origin:", origin, "allowed:", allowed);
+      return cb(null, false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
 );
 
 app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));
 
-// MongoDB connection
 let cached = global.mongoose;
-
 if (!cached) {
-    cached = global.mongoose = { conn: null, promise: null };
+  cached = global.mongoose = { conn: null, promise: null };
 }
 
 async function connectDB() {
-    if (cached.conn) return cached.conn;
-
-    if (!cached.promise) {
-        const opts = {
-            bufferCommands: false,
-        };
-        cached.promise = mongoose.connect(process.env.MONGODB_URI, opts).then((mongoose) => {
-            return mongoose;
-        });
-    }
-    cached.conn = await cached.promise;
-    return cached.conn;
+  if (!process.env.MONGODB_URI) {
+    throw new Error("MONGODB_URI is not set");
+  }
+  if (cached.conn) return cached.conn;
+  if (!cached.promise) {
+    cached.promise = mongoose
+      .connect(process.env.MONGODB_URI, { bufferCommands: false })
+      .then((m) => m);
+  }
+  cached.conn = await cached.promise;
+  return cached.conn;
 }
 
-// Health check
-app.get("/api/health", async (req, res) => {
-    try {
-        await connectDB();
-        res.json({
-            success: true,
-            message: "Load Calculator API is running",
-            db: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
-            environment: process.env.NODE_ENV || "development",
-        });
-    } catch (error) {
-        res.json({
-            success: true,
-            message: "Load Calculator API is running",
-            db: "error: " + error.message,
-            environment: process.env.NODE_ENV || "development",
-        });
-    }
-});
-
-// Auth routes (no auth required for login/register)
-app.use("/api/auth", authRouter);
-
-// Calculation routes with auth
-app.use("/api/calculations", async (req, res, next) => {
-    try {
-        await connectDB();
-        next();
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: "Database connection failed",
-            error: error.message,
-        });
-    }
-}, calculationsRouter);
-
-// 404 handler
-app.use((req, res) => {
-    res.status(404).json({
-        success: false,
-        message: "Route not found",
-        path: req.path,
-    });
-});
-
-// Error handler
-app.use((err, req, res, next) => {
-    console.error("Server error:", err);
+// Ensure DB for every API request (including auth login)
+app.use("/api", async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error("DB connection failed:", error.message);
     res.status(500).json({
-        success: false,
-        message: "Internal server error",
-        error: process.env.NODE_ENV === "development" ? err.message : undefined,
+      success: false,
+      message: "Database connection failed",
+      error: error.message,
     });
+  }
 });
+
+app.get("/api/health", async (req, res) => {
+  res.json({
+    success: true,
+    message: "Load Calculator API is running",
+    db: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+    environment: process.env.NODE_ENV || "development",
+  });
+});
+
+app.use("/api/auth", authRouter);
+app.use("/api/calculations", calculationsRouter);
+
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: "Route not found" });
+});
+
+app.use((err, req, res, next) => {
+  console.error("Unhandled error:", err);
+  res.status(500).json({
+    success: false,
+    message: "Internal server error",
+    error: process.env.NODE_ENV === "development" ? err.message : undefined,
+  });
+});
+
+// Local server
+if (require.main === module) {
+  const PORT = process.env.PORT || 5000;
+  connectDB()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`API running on http://localhost:${PORT}`);
+      });
+    })
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
+}
 
 module.exports = app;
