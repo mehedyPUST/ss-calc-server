@@ -1,4 +1,5 @@
 require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
@@ -8,31 +9,49 @@ const authRouter = require("../routes/auth");
 
 const app = express();
 
-function getAllowedOrigins() {
-  const list = [
+/**
+ * Allowed browser origins for credentialed requests.
+ * Set FRONTEND_URL on Vercel to your real frontend URL(s), comma-separated.
+ * Also allows localhost and *.vercel.app so previews work.
+ */
+function isOriginAllowed(origin) {
+  if (!origin) return true; // same-origin / curl / server-to-server
+
+  const defaults = [
     "http://localhost:3000",
     "http://localhost:3001",
     "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
   ];
-  if (process.env.FRONTEND_URL) {
-    process.env.FRONTEND_URL.split(",").forEach((o) => {
-      const t = o.trim();
-      if (t) list.push(t);
-    });
+
+  const fromEnv = (process.env.FRONTEND_URL || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const allowed = new Set([...defaults, ...fromEnv]);
+  if (allowed.has(origin)) return true;
+
+  // Vercel production + preview deployments of the frontend
+  try {
+    const host = new URL(origin).hostname;
+    if (host.endsWith(".vercel.app")) return true;
+  } catch {
+    // ignore
   }
-  return list;
+
+  return false;
 }
 
 app.use(
   cors({
-    origin(origin, cb) {
-      const allowed = getAllowedOrigins();
-      // Allow non-browser / same-origin tools (no Origin header)
-      if (!origin || allowed.includes(origin)) {
-        return cb(null, true);
+    origin(origin, callback) {
+      if (isOriginAllowed(origin)) {
+        callback(null, true);
+      } else {
+        console.warn("[CORS] blocked:", origin);
+        callback(new Error(`CORS blocked for origin: ${origin}`));
       }
-      console.warn("CORS blocked origin:", origin, "allowed:", allowed);
-      return cb(null, false);
     },
     credentials: true,
     methods: ["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
@@ -62,7 +81,6 @@ async function connectDB() {
   return cached.conn;
 }
 
-// Ensure DB for every API request (including auth login)
 app.use("/api", async (req, res, next) => {
   try {
     await connectDB();
@@ -94,6 +112,13 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
+  // CORS errors
+  if (err && String(err.message || "").startsWith("CORS blocked")) {
+    return res.status(403).json({
+      success: false,
+      message: err.message,
+    });
+  }
   console.error("Unhandled error:", err);
   res.status(500).json({
     success: false,
@@ -102,7 +127,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Local server
 if (require.main === module) {
   const PORT = process.env.PORT || 5000;
   connectDB()

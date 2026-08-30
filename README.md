@@ -1,26 +1,38 @@
-# Load Calculator API (Express)
+# Load Calculator API
+
+## Why "API not reachable" in the browser?
+
+The API can be up (`/api/health` OK) while the **browser** still blocks calls due to **CORS**.
+
+On Vercel set:
+
+| Variable | Example |
+|----------|---------|
+| `MONGODB_URI` | Atlas connection string |
+| `JWT_SECRET` | long random string |
+| `FRONTEND_URL` | `https://your-frontend.vercel.app` |
+| `NODE_ENV` | `production` |
+
+Frontend env:
+
+| Variable | Example |
+|----------|---------|
+| `NEXT_PUBLIC_API_URL` | `https://ss-calc-server.vercel.app` |
+
+This build also allows any `https://*.vercel.app` origin so preview URLs work.
 
 ## Local
 
 ```bash
 npm install
 cp .env.example .env
-# set MONGODB_URI, JWT_SECRET, FRONTEND_URL
 npm run dev
 ```
 
-First admin: `POST /api/auth/register` with `{ "username", "password", "email?" }`  
-(no secret needed when zero admins exist)
+## First admin
 
-## Vercel
-
-1. Deploy this folder as a separate Vercel project
-2. Environment variables:
-   - `MONGODB_URI`
-   - `JWT_SECRET`
-   - `ADMIN_REGISTRATION_SECRET` (optional)
-   - `FRONTEND_URL` = `https://your-frontend.vercel.app` (comma-separated if multiple)
-   - `NODE_ENV=production`
-3. Set frontend `NEXT_PUBLIC_API_URL` to this API URL (e.g. `https://your-api.vercel.app`)
-
-Login returns a JWT in the JSON body; the frontend stores it and sends `Authorization: Bearer …` so auth works across domains.
+```bash
+curl -X POST https://ss-calc-server.vercel.app/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"your-password"}'
+```
