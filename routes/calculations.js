@@ -643,6 +643,64 @@ router.get("/max-load", optionalAuth, async (req, res) => {
 });
 
 // GET /api/calculations/:id - Optional auth
+
+// ── App settings (ring mode preference) ─────────────────────────────────────
+// Mounted at /api/calculations/settings so it works when only this router is updated.
+router.get("/settings", async (_req, res) => {
+  try {
+    const Settings = require("../models/Settings");
+    let doc = await Settings.findOne({ key: "app" }).lean();
+    if (!doc) {
+      const created = await Settings.create({ key: "app", maxLoadRingMode: "with" });
+      doc = created.toObject();
+    }
+    res.json({
+      success: true,
+      data: {
+        maxLoadRingMode: doc.maxLoadRingMode === "without" ? "without" : "with",
+      },
+    });
+  } catch (err) {
+    console.error("GET /api/calculations/settings:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to load settings",
+      error: err.message,
+    });
+  }
+});
+
+router.patch("/settings", async (req, res) => {
+  try {
+    const Settings = require("../models/Settings");
+    let mode = String(req.body?.maxLoadRingMode || "").toLowerCase();
+    if (mode !== "with" && mode !== "without") {
+      return res.status(400).json({
+        success: false,
+        message: 'maxLoadRingMode must be "with" or "without"',
+      });
+    }
+    const doc = await Settings.findOneAndUpdate(
+      { key: "app" },
+      { $set: { maxLoadRingMode: mode } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+    res.json({
+      success: true,
+      data: {
+        maxLoadRingMode: doc.maxLoadRingMode === "without" ? "without" : "with",
+      },
+    });
+  } catch (err) {
+    console.error("PATCH /api/calculations/settings:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to save settings",
+      error: err.message,
+    });
+  }
+});
+
 router.get("/:id", optionalAuth, async (req, res) => {
   try {
     await purgeExpiredTrash();
