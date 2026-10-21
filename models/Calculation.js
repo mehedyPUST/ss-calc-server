@@ -8,6 +8,7 @@ const feederSchema = new mongoose.Schema(
     bus: { type: Number, required: true },
     amps: { type: Number, default: 0 },
     mw: { type: Number, default: 0 },
+    ringActive: { type: Boolean, default: false },
   },
   { _id: false }
 );
@@ -27,6 +28,7 @@ const calculationSchema = new mongoose.Schema(
     /** true when saved via "Calculate & Save for this hour" */
     isHourly: { type: Boolean, default: false },
     note: { type: String, default: "" },
+    hasActiveRing: { type: Boolean, default: false },
     deletedAt: { type: Date, default: null },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -42,5 +44,6 @@ calculationSchema.index({ deletedAt: 1, createdAt: -1 });
 calculationSchema.index({ deletedAt: 1 });
 calculationSchema.index({ createdBy: 1 });
 calculationSchema.index({ deletedAt: 1, isHourly: 1, calculatedAt: -1 });
+calculationSchema.index({ deletedAt: 1, hasActiveRing: 1, calculatedAt: -1 });
 
 module.exports = mongoose.model("Calculation", calculationSchema);

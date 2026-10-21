@@ -113,18 +113,31 @@ router.post("/", requireAuth, async (req, res) => {
         : null;
     const isHourly = body.isHourly === true || !!hourSlot;
 
+    const normalizedFeeders = (feeders || []).map((f) => ({
+      id: f.id,
+      name: f.name,
+      bus: f.bus,
+      amps: Number(f.amps) || 0,
+      mw: Number(f.mw) || 0,
+      ringActive: f.ringActive === true,
+    }));
+    const hasActiveRing =
+      body.hasActiveRing === true ||
+      normalizedFeeders.some((f) => f.ringActive);
+
     const fields = {
       busVoltages: {
         bus1: Number(busVoltages.bus1),
         bus2: Number(busVoltages.bus2),
       },
-      feeders,
+      feeders: normalizedFeeders,
       bottail11kV: Number(bottail11kV) || 0,
       totalMW: Number(totalMW) || 0,
       note: note || "",
       calculatedAt,
       hourSlot,
       isHourly,
+      hasActiveRing,
       deletedAt: null,
       createdBy: req.adminId,
     };
@@ -371,6 +384,22 @@ router.get("/max-load", optionalAuth, async (req, res) => {
       });
     }
 
+    // ringMode:
+    //   without (default) = only records with NO active ring → max from non-ring data
+    //   with / all        = consider ALL records for max (ring + non-ring);
+    //                       peaks carry hasActiveRing so UI can show ring indicator
+    let ringMode = String(req.query.ringMode || "without").toLowerCase();
+    if (!["without", "with", "all"].includes(ringMode)) ringMode = "without";
+    if (ringMode === "without") {
+      andParts.push({
+        $or: [
+          { hasActiveRing: false },
+          { hasActiveRing: { $exists: false } },
+        ],
+      });
+    }
+    // ringMode === "with" | "all": no hasActiveRing filter — max from all data
+
     const hourlyMatch = {
       $and: [
         ...andParts,
@@ -407,6 +436,7 @@ router.get("/max-load", optionalAuth, async (req, res) => {
               maxLoadAt: "$eventAt",
               ampsAtMax: "$feeders.amps",
               hourSlot: "$hourSlot",
+              hasActiveRing: { $eq: ["$hasActiveRing", true] },
             },
           },
           recordCount: { $sum: 1 },
@@ -439,6 +469,7 @@ router.get("/max-load", optionalAuth, async (req, res) => {
           maxTotalMW: "$totalMW",
           maxTotalAt: "$eventAt",
           hourSlot: 1,
+          hasActiveRing: { $eq: ["$hasActiveRing", true] },
         },
       },
     ]);
@@ -454,6 +485,7 @@ router.get("/max-load", optionalAuth, async (req, res) => {
           maxMW: { $ifNull: ["$bottail11kV", 0] },
           maxLoadAt: "$eventAt",
           hourSlot: 1,
+          hasActiveRing: { $eq: ["$hasActiveRing", true] },
           ampsAtMax: {
             $sum: {
               $map: {
@@ -479,6 +511,7 @@ router.get("/max-load", optionalAuth, async (req, res) => {
       success: true,
       range,
       label,
+      ringMode,
       year,
       month,
       start: start ? start.toISOString() : null,
@@ -498,6 +531,7 @@ router.get("/max-load", optionalAuth, async (req, res) => {
           maxLoadAt: p.maxLoadAt,
           ampsAtMax: p.ampsAtMax ?? 0,
           hourSlot: p.hourSlot || null,
+          hasActiveRing: !!p.hasActiveRing,
         })),
       })),
       bottail11Peaks: (bottail11Peaks || []).map((p) => ({
@@ -505,8 +539,14 @@ router.get("/max-load", optionalAuth, async (req, res) => {
         maxLoadAt: p.maxLoadAt,
         ampsAtMax: p.ampsAtMax ?? 0,
         hourSlot: p.hourSlot || null,
+        hasActiveRing: !!p.hasActiveRing,
       })),
-      totalPeak: totalPeak[0] || null,
+      totalPeak: totalPeak[0]
+        ? {
+            ...totalPeak[0],
+            hasActiveRing: !!totalPeak[0].hasActiveRing,
+          }
+        : null,
       isAuthenticated: !!req.admin,
     });
   } catch (err) {
