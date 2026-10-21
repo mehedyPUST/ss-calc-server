@@ -266,16 +266,27 @@ router.get("/", optionalAuth, async (req, res) => {
   }
 });
 
-// GET /api/calculations/max-load?year=YYYY&month=MM
+// GET /api/calculations/max-load?range=today|last7days|lastweek|monthly|yearly|alltime&year=YYYY&month=MM
 // Top 5 max MW peaks per feeder (prefer hourly / hourSlot saves)
 router.get("/max-load", optionalAuth, async (req, res) => {
   try {
     await purgeExpiredTrash();
 
-    const now = new Date();
-    let year = parseInt(req.query.year, 10);
-    let month = parseInt(req.query.month, 10); // 1–12
+    const VALID_RANGES = new Set([
+      "today",
+      "last7days",
+      "lastweek",
+      "monthly",
+      "yearly",
+      "alltime",
+    ]);
 
+    const now = new Date();
+    let range = String(req.query.range || "monthly").toLowerCase();
+    if (!VALID_RANGES.has(range)) range = "monthly";
+
+    let year = parseInt(req.query.year, 10);
+    let month = parseInt(req.query.month, 10);
     if (!Number.isFinite(year) || year < 2000 || year > 2100) {
       year = now.getFullYear();
     }
@@ -283,25 +294,86 @@ router.get("/max-load", optionalAuth, async (req, res) => {
       month = now.getMonth() + 1;
     }
 
-    // Use local calendar month (server local TZ)
-    const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
-    const end = new Date(year, month, 1, 0, 0, 0, 0);
+    let start = null;
+    let end = null;
+    let label = "";
 
-    const dateMatch = {
-      $or: [
-        { calculatedAt: { $gte: start, $lt: end } },
-        {
-          calculatedAt: { $exists: false },
-          createdAt: { $gte: start, $lt: end },
-        },
-      ],
-    };
+    switch (range) {
+      case "today": {
+        start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+        end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
+        label = "Today";
+        break;
+      }
+      case "last7days": {
+        end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
+        start = new Date(end);
+        start.setDate(start.getDate() - 7);
+        label = "Last 7 days";
+        break;
+      }
+      case "lastweek": {
+        const day = now.getDay();
+        const daysSinceMon = day === 0 ? 6 : day - 1;
+        const thisMon = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate() - daysSinceMon,
+          0,
+          0,
+          0,
+          0
+        );
+        end = thisMon;
+        start = new Date(thisMon);
+        start.setDate(start.getDate() - 7);
+        label = "Last week";
+        break;
+      }
+      case "yearly": {
+        start = new Date(year, 0, 1, 0, 0, 0, 0);
+        end = new Date(year + 1, 0, 1, 0, 0, 0, 0);
+        label = `Year ${year}`;
+        break;
+      }
+      case "alltime": {
+        start = null;
+        end = null;
+        label = "All time";
+        break;
+      }
+      case "monthly":
+      default: {
+        start = new Date(year, month - 1, 1, 0, 0, 0, 0);
+        end = new Date(year, month, 1, 0, 0, 0, 0);
+        const names = [
+          "January", "February", "March", "April", "May", "June",
+          "July", "August", "September", "October", "November", "December",
+        ];
+        label = `${names[month - 1]} ${year}`;
+        break;
+      }
+    }
 
-    // Prefer dedicated hourly saves; fall back to all if none exist
+    const andParts = [activeFilter];
+    if (start || end) {
+      const rangeQ = {};
+      if (start) rangeQ.$gte = start;
+      if (end) rangeQ.$lt = end;
+      andParts.push({
+        $or: [
+          { calculatedAt: rangeQ },
+          {
+            calculatedAt: { $exists: false },
+            createdAt: rangeQ,
+          },
+        ],
+      });
+    }
+
     const hourlyMatch = {
       $and: [
-        activeFilter,
-        dateMatch,
+        ...andParts,
         {
           $or: [
             { isHourly: true },
@@ -310,7 +382,7 @@ router.get("/max-load", optionalAuth, async (req, res) => {
         },
       ],
     };
-    const anyMatch = { $and: [activeFilter, dateMatch] };
+    const anyMatch = { $and: andParts };
 
     const hourlyCount = await Calculation.countDocuments(hourlyMatch);
     const baseMatch = hourlyCount > 0 ? hourlyMatch : anyMatch;
@@ -371,7 +443,6 @@ router.get("/max-load", optionalAuth, async (req, res) => {
       },
     ]);
 
-    // Top 5 Bottail 11 kV peaks (H-3 + T-3 combined field)
     const bottail11Peaks = await Calculation.aggregate([
       { $match: baseMatch },
       { $addFields: { eventAt: { $ifNull: ["$calculatedAt", "$createdAt"] } } },
@@ -406,10 +477,12 @@ router.get("/max-load", optionalAuth, async (req, res) => {
 
     res.json({
       success: true,
+      range,
+      label,
       year,
       month,
-      start: start.toISOString(),
-      end: end.toISOString(),
+      start: start ? start.toISOString() : null,
+      end: end ? end.toISOString() : null,
       sampleCount,
       hourlyOnly: hourlyCount > 0,
       data: rows.map((r) => ({
