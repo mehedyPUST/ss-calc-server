@@ -22,6 +22,10 @@ const calculationSchema = new mongoose.Schema(
     bottail11kV: { type: Number, default: 0 },
     totalMW: { type: Number, default: 0 },
     calculatedAt: { type: Date, default: Date.now },
+    /** e.g. "14:00" or "18:30" — set for hourly / special-slot saves */
+    hourSlot: { type: String, default: null },
+    /** true when saved via "Calculate & Save for this hour" */
+    isHourly: { type: Boolean, default: false },
     note: { type: String, default: "" },
     deletedAt: { type: Date, default: null },
     createdBy: {
@@ -37,5 +41,6 @@ const calculationSchema = new mongoose.Schema(
 calculationSchema.index({ deletedAt: 1, createdAt: -1 });
 calculationSchema.index({ deletedAt: 1 });
 calculationSchema.index({ createdBy: 1 });
+calculationSchema.index({ deletedAt: 1, isHourly: 1, calculatedAt: -1 });
 
 module.exports = mongoose.model("Calculation", calculationSchema);
