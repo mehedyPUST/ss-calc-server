@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 const calculationsRouter = require("./routes/calculations");
+const settingsRouter = require("./routes/settings");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -29,6 +30,7 @@ app.get("/api/health", (_req, res) => {
 
 // Routes
 app.use("/api/calculations", calculationsRouter);
+app.use("/api/settings", settingsRouter);
 
 // 404
 app.use((_req, res) => {

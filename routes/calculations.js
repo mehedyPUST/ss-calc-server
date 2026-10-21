@@ -241,28 +241,95 @@ router.get("/slot-check", optionalAuth, async (req, res) => {
   }
 });
 
+function dayBoundsFromYmd(ymd) {
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return null;
+  const [y, m, d] = String(ymd).split("-").map(Number);
+  if (!y || !m || !d) return null;
+  const start = new Date(y, m - 1, d, 0, 0, 0, 0);
+  const end = new Date(y, m - 1, d + 1, 0, 0, 0, 0);
+  if (Number.isNaN(start.getTime())) return null;
+  return { start, end };
+}
+
+function buildEventDateFilter(query) {
+  const single = query.date;
+  const from = query.from;
+  const to = query.to;
+
+  if (single) {
+    const b = dayBoundsFromYmd(single);
+    if (!b) return null;
+    const eventAt = { $ifNull: ["$calculatedAt", "$createdAt"] };
+    return {
+      $expr: {
+        $and: [
+          { $gte: [eventAt, b.start] },
+          { $lt: [eventAt, b.end] },
+        ],
+      },
+    };
+  }
+
+  const fromB = from ? dayBoundsFromYmd(from) : null;
+  const toB = to ? dayBoundsFromYmd(to) : null;
+  if (!fromB && !toB) return null;
+
+  const eventAt = { $ifNull: ["$calculatedAt", "$createdAt"] };
+  const parts = [];
+  if (fromB) parts.push({ $gte: [eventAt, fromB.start] });
+  if (toB) parts.push({ $lt: [eventAt, toB.end] });
+  return { $expr: parts.length === 1 ? parts[0] : { $and: parts } };
+}
+
 // GET /api/calculations - Optional auth (view without login for read-only)
+// Query: page, limit, trash, date=YYYY-MM-DD, from, to
 router.get("/", optionalAuth, async (req, res) => {
   try {
     await purgeExpiredTrash();
 
-    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const rawLimit = String(req.query.limit ?? "50").toLowerCase();
+    let limit;
+    if (rawLimit === "0" || rawLimit === "all") {
+      limit = 0;
+    } else {
+      const n = parseInt(rawLimit, 10);
+      limit = Math.min(Number.isFinite(n) && n > 0 ? n : 50, 200);
+    }
+    const pageRaw = parseInt(req.query.page || "1", 10);
+    const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+    const skip = limit > 0 ? (page - 1) * limit : 0;
+
     const trash = req.query.trash === "1" || req.query.trash === "true";
+    const baseFilter = trash ? trashFilter : activeFilter;
+    const dateFilter = buildEventDateFilter(req.query);
+    const filter = dateFilter
+      ? { $and: [baseFilter, dateFilter] }
+      : baseFilter;
 
-    const filter = trash ? trashFilter : activeFilter;
+    const sort = trash ? { deletedAt: -1 } : { createdAt: -1 };
+    const q = Calculation.find(filter).sort(sort);
+    if (limit > 0) {
+      q.skip(skip).limit(limit);
+    } else {
+      q.limit(10000);
+    }
 
-    const [docs, inboxCount, trashCount] = await Promise.all([
-      Calculation.find(filter)
-        .sort(trash ? { deletedAt: -1 } : { createdAt: -1 })
-        .limit(limit)
-        .lean(),
+    const [docs, total, inboxCount, trashCount] = await Promise.all([
+      q.lean(),
+      Calculation.countDocuments(filter),
       Calculation.countDocuments(activeFilter),
       Calculation.countDocuments(trashFilter),
     ]);
 
+    const pages = limit > 0 ? Math.max(1, Math.ceil(total / limit)) : 1;
+
     res.json({
       success: true,
       count: docs.length,
+      total,
+      page: limit > 0 ? page : 1,
+      limit: limit > 0 ? limit : total,
+      pages,
       inboxCount,
       trashCount,
       trash,
@@ -313,15 +380,20 @@ router.get("/max-load", optionalAuth, async (req, res) => {
 
     switch (range) {
       case "today": {
-        start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-        end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
+        const BD = 6 * 60 * 60 * 1000;
+        const t = new Date(now.getTime() + BD);
+        const y = t.getUTCFullYear(), m = t.getUTCMonth(), d = t.getUTCDate();
+        start = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - BD);
+        end = new Date(Date.UTC(y, m, d + 1, 0, 0, 0, 0) - BD);
         label = "Today";
         break;
       }
       case "last7days": {
-        end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
-        start = new Date(end);
-        start.setDate(start.getDate() - 7);
+        const BD = 6 * 60 * 60 * 1000;
+        const t = new Date(now.getTime() + BD);
+        const y = t.getUTCFullYear(), m = t.getUTCMonth(), d = t.getUTCDate();
+        end = new Date(Date.UTC(y, m, d + 1, 0, 0, 0, 0) - BD);
+        start = new Date(Date.UTC(y, m, d + 1 - 7, 0, 0, 0, 0) - BD);
         label = "Last 7 days";
         break;
       }
@@ -357,8 +429,12 @@ router.get("/max-load", optionalAuth, async (req, res) => {
       }
       case "monthly":
       default: {
-        start = new Date(year, month - 1, 1, 0, 0, 0, 0);
-        end = new Date(year, month, 1, 0, 0, 0, 0);
+        const BD = 6 * 60 * 60 * 1000;
+        start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0) - BD);
+        end =
+          month === 12
+            ? new Date(Date.UTC(year + 1, 0, 1, 0, 0, 0, 0) - BD)
+            : new Date(Date.UTC(year, month, 1, 0, 0, 0, 0) - BD);
         const names = [
           "January", "February", "March", "April", "May", "June",
           "July", "August", "September", "October", "November", "December",
@@ -369,27 +445,21 @@ router.get("/max-load", optionalAuth, async (req, res) => {
     }
 
     const andParts = [activeFilter];
+    // Include if calculatedAt OR createdAt falls in range (broad match)
+    let dateMatchServer = null;
     if (start || end) {
       const rangeQ = {};
       if (start) rangeQ.$gte = start;
       if (end) rangeQ.$lt = end;
-      andParts.push({
-        $or: [
-          { calculatedAt: rangeQ },
-          {
-            calculatedAt: { $exists: false },
-            createdAt: rangeQ,
-          },
-        ],
-      });
+      dateMatchServer = {
+        $or: [{ calculatedAt: rangeQ }, { createdAt: rangeQ }],
+      };
+      andParts.push(dateMatchServer);
     }
 
-    // ringMode:
-    //   without (default) = only records with NO active ring → max from non-ring data
-    //   with / all        = consider ALL records for max (ring + non-ring);
-    //                       peaks carry hasActiveRing so UI can show ring indicator
-    let ringMode = String(req.query.ringMode || "without").toLowerCase();
-    if (!["without", "with", "all"].includes(ringMode)) ringMode = "without";
+    // ringMode: without = no ring only; with/all = all records (default with)
+    let ringMode = String(req.query.ringMode || "with").toLowerCase();
+    if (!["without", "with", "all"].includes(ringMode)) ringMode = "with";
     if (ringMode === "without") {
       andParts.push({
         $or: [
@@ -398,9 +468,10 @@ router.get("/max-load", optionalAuth, async (req, res) => {
         ],
       });
     }
-    // ringMode === "with" | "all": no hasActiveRing filter — max from all data
 
-    const hourlyMatch = {
+    const baseMatch = { $and: andParts };
+
+    const hourlyCount = await Calculation.countDocuments({
       $and: [
         ...andParts,
         {
@@ -410,11 +481,7 @@ router.get("/max-load", optionalAuth, async (req, res) => {
           ],
         },
       ],
-    };
-    const anyMatch = { $and: andParts };
-
-    const hourlyCount = await Calculation.countDocuments(hourlyMatch);
-    const baseMatch = hourlyCount > 0 ? hourlyMatch : anyMatch;
+    });
 
     const pipeline = [
       { $match: baseMatch },
@@ -458,15 +525,31 @@ router.get("/max-load", optionalAuth, async (req, res) => {
 
     const rows = await Calculation.aggregate(pipeline);
 
+    // Station peak always uses ALL data in the date range (ignore ring)
+    const stationPeakMatch = {
+      $and: [activeFilter, ...(dateMatchServer ? [dateMatchServer] : [])],
+    };
     const totalPeak = await Calculation.aggregate([
-      { $match: baseMatch },
-      { $addFields: { eventAt: { $ifNull: ["$calculatedAt", "$createdAt"] } } },
-      { $sort: { totalMW: -1, eventAt: 1 } },
+      { $match: stationPeakMatch },
+      {
+        $addFields: {
+          eventAt: { $ifNull: ["$calculatedAt", "$createdAt"] },
+          totalMWNum: {
+            $convert: {
+              input: "$totalMW",
+              to: "double",
+              onError: 0,
+              onNull: 0,
+            },
+          },
+        },
+      },
+      { $sort: { totalMWNum: -1, eventAt: 1 } },
       { $limit: 1 },
       {
         $project: {
           _id: 0,
-          maxTotalMW: "$totalMW",
+          maxTotalMW: "$totalMWNum",
           maxTotalAt: "$eventAt",
           hourSlot: 1,
           hasActiveRing: { $eq: ["$hasActiveRing", true] },
