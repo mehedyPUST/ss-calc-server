@@ -243,8 +243,10 @@ function dayBoundsFromYmd(ymd) {
   if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return null;
   const [y, m, d] = String(ymd).split("-").map(Number);
   if (!y || !m || !d) return null;
-  const start = new Date(y, m - 1, d, 0, 0, 0, 0);
-  const end = new Date(y, m - 1, d + 1, 0, 0, 0, 0);
+  // Asia/Dhaka (UTC+6) — must not use server-local timezone
+  const OFFSET_MS = 6 * 60 * 60 * 1000;
+  const start = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0) - OFFSET_MS);
+  const end = new Date(Date.UTC(y, m - 1, d + 1, 0, 0, 0, 0) - OFFSET_MS);
   if (Number.isNaN(start.getTime())) return null;
   return { start, end };
 }
