@@ -119,9 +119,20 @@ router.post("/", requireAuth, async (req, res) => {
       bus: f.bus,
       amps: Number(f.amps) || 0,
       mw: Number(f.mw) || 0,
+      lsMW: Math.max(0, Number(f.lsMW) || 0),
       ringActive: f.ringActive === true,
     }));
     const hasActiveRing = normalizedFeeders.some((f) => f.ringActive === true);
+
+    const allotmentRaw = body.allotment;
+    const allotmentNum =
+      allotmentRaw === null || allotmentRaw === undefined || allotmentRaw === ""
+        ? null
+        : Number(allotmentRaw);
+    const allotmentVal =
+      allotmentNum != null && Number.isFinite(allotmentNum) && allotmentNum >= 0
+        ? allotmentNum
+        : null;
 
     const fields = {
       busVoltages: {
@@ -131,6 +142,7 @@ router.post("/", requireAuth, async (req, res) => {
       feeders: normalizedFeeders,
       bottail11kV: Number(bottail11kV) || 0,
       totalMW: Number(totalMW) || 0,
+      allotment: allotmentVal,
       note: note || "",
       calculatedAt,
       hourSlot,
@@ -837,8 +849,19 @@ router.patch("/:id", requireAuth, async (req, res) => {
       bus: f.bus,
       amps: Number(f.amps) || 0,
       mw: Number(f.mw) || 0,
+      lsMW: Math.max(0, Number(f.lsMW) || 0),
       ringActive: f.ringActive === true,
     }));
+
+    const allotmentRaw = body.allotment;
+    const allotmentNum =
+      allotmentRaw === null || allotmentRaw === undefined || allotmentRaw === ""
+        ? null
+        : Number(allotmentRaw);
+    const allotmentVal =
+      allotmentNum != null && Number.isFinite(allotmentNum) && allotmentNum >= 0
+        ? allotmentNum
+        : null;
 
     const fields = {
       busVoltages: {
@@ -848,6 +871,7 @@ router.patch("/:id", requireAuth, async (req, res) => {
       feeders: normalizedFeeders,
       bottail11kV: Number(bottail11kV) || 0,
       totalMW: Number(totalMW) || 0,
+      allotment: allotmentVal,
       hasActiveRing: normalizedFeeders.some((f) => f.ringActive === true),
     };
     if (note != null) fields.note = String(note);

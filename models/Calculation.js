@@ -8,6 +8,8 @@ const feederSchema = new mongoose.Schema(
     bus: { type: Number, required: true },
     amps: { type: Number, default: 0 },
     mw: { type: Number, default: 0 },
+    /** Actual load-shed applied on this feeder (MW) for the slot */
+    lsMW: { type: Number, default: 0 },
     ringActive: { type: Boolean, default: false },
   },
   { _id: false }
@@ -22,6 +24,8 @@ const calculationSchema = new mongoose.Schema(
     feeders: [feederSchema],
     bottail11kV: { type: Number, default: 0 },
     totalMW: { type: Number, default: 0 },
+    /** Grid allotment for this slot (MW). null/undefined = unlimited */
+    allotment: { type: Number, default: null },
     calculatedAt: { type: Date, default: Date.now },
     /** e.g. "14:00" or "18:30" — set for hourly / special-slot saves */
     hourSlot: { type: String, default: null },
