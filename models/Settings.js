@@ -8,11 +8,14 @@ const settingsSchema = new mongoose.Schema(
       unique: true,
       default: "app",
     },
-    /** Max Load page ring filter: with = all data, without = no-ring only */
     maxLoadRingMode: {
       type: String,
       enum: ["with", "without"],
       default: "with",
+    },
+    calculatorRingActive: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
     },
   },
   { timestamps: true }

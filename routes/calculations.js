@@ -121,9 +121,7 @@ router.post("/", requireAuth, async (req, res) => {
       mw: Number(f.mw) || 0,
       ringActive: f.ringActive === true,
     }));
-    const hasActiveRing =
-      body.hasActiveRing === true ||
-      normalizedFeeders.some((f) => f.ringActive);
+    const hasActiveRing = normalizedFeeders.some((f) => f.ringActive === true);
 
     const fields = {
       busVoltages: {
@@ -462,9 +460,15 @@ router.get("/max-load", optionalAuth, async (req, res) => {
     if (!["without", "with", "all"].includes(ringMode)) ringMode = "with";
     if (ringMode === "without") {
       andParts.push({
-        $or: [
-          { hasActiveRing: false },
-          { hasActiveRing: { $exists: false } },
+        $and: [
+          {
+            $or: [
+              { hasActiveRing: false },
+              { hasActiveRing: { $exists: false } },
+              { hasActiveRing: null },
+            ],
+          },
+          { $nor: [{ "feeders.ringActive": true }] },
         ],
       });
     }
@@ -780,36 +784,100 @@ router.delete("/:id", requireAuth, async (req, res) => {
   }
 });
 
-// PATCH /api/calculations/:id - Requires authentication
+// PATCH /api/calculations/:id
+// - { action: 'restore' } → restore from trash
+// - calculation fields → full update of active record
 router.patch("/:id", requireAuth, async (req, res) => {
   try {
     await purgeExpiredTrash();
     const { id } = req.params;
-    const { action } = req.body;
+    const body = req.body || {};
 
-    if (action !== "restore") {
-      return res.status(400).json({
-        success: false,
-        message: "Unsupported action. Use { action: 'restore' }",
+    if (body.action === "restore") {
+      const doc = await Calculation.findOneAndUpdate(
+        { _id: id, deletedAt: { $ne: null } },
+        { $set: { deletedAt: null } },
+        { new: true }
+      );
+
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          message: "Not found in trash",
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: "Restored",
+        data: doc,
       });
     }
 
+    // Full update of an existing (non-trashed) calculation
+    const { busVoltages, feeders, bottail11kV, totalMW, note } = body;
+    if (
+      !busVoltages ||
+      busVoltages.bus1 == null ||
+      busVoltages.bus2 == null ||
+      !Array.isArray(feeders)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Missing required fields: busVoltages and feeders (or use { action: 'restore' })",
+      });
+    }
+
+    const normalizedFeeders = feeders.map((f) => ({
+      id: f.id,
+      name: f.name,
+      bus: f.bus,
+      amps: Number(f.amps) || 0,
+      mw: Number(f.mw) || 0,
+      ringActive: f.ringActive === true,
+    }));
+
+    const fields = {
+      busVoltages: {
+        bus1: Number(busVoltages.bus1),
+        bus2: Number(busVoltages.bus2),
+      },
+      feeders: normalizedFeeders,
+      bottail11kV: Number(bottail11kV) || 0,
+      totalMW: Number(totalMW) || 0,
+      hasActiveRing: normalizedFeeders.some((f) => f.ringActive === true),
+    };
+    if (note != null) fields.note = String(note);
+
+    if (typeof body.hourSlot === "string" && body.hourSlot.trim()) {
+      fields.hourSlot = body.hourSlot.trim();
+      fields.isHourly = true;
+    }
+    if (body.calculatedAt) {
+      const parsed = new Date(body.calculatedAt);
+      if (!Number.isNaN(parsed.getTime())) fields.calculatedAt = parsed;
+    }
+
     const doc = await Calculation.findOneAndUpdate(
-      { _id: id, deletedAt: { $ne: null } },
-      { $set: { deletedAt: null } },
+      {
+        _id: id,
+        $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
+      },
+      { $set: fields },
       { new: true }
     );
 
     if (!doc) {
       return res.status(404).json({
         success: false,
-        message: "Not found in trash",
+        message: "Not found or in trash",
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
-      message: "Restored",
+      message: "Updated",
       data: doc,
     });
   } catch (err) {
