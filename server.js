@@ -5,6 +5,7 @@ const mongoose = require("mongoose");
 const calculationsRouter = require("./routes/calculations");
 const settingsRouter = require("./routes/settings");
 const adminUsersRouter = require("./routes/adminUsers");
+const circleLoadRouter = require("./routes/circleLoad");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -33,6 +34,7 @@ app.get("/api/health", (_req, res) => {
 app.use("/api/calculations", calculationsRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/admin/users", adminUsersRouter);
+app.use("/api/circle-load", circleLoadRouter);
 
 // 404
 app.use((_req, res) => {

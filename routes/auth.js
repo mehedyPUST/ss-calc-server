@@ -77,6 +77,7 @@ router.post("/login", async (req, res) => {
         username: admin.username,
         email: admin.email,
         role: normalizeRole(admin.role),
+        assignedStation: admin.assignedStation || "",
         lastLogin: admin.lastLogin,
       },
     });
@@ -113,7 +114,7 @@ router.get("/check", async (req, res) => {
       process.env.JWT_SECRET || "dev-only-change-me"
     );
     const admin = await Admin.findById(decoded.id).select(
-      "username email role isActive lastLogin"
+      "username email role isActive assignedStation lastLogin"
     );
     if (!admin) {
       return res.json({ success: true, authenticated: false });
@@ -135,6 +136,7 @@ router.get("/check", async (req, res) => {
         username: admin.username,
         email: admin.email,
         role: normalizeRole(admin.role),
+        assignedStation: admin.assignedStation || "",
         lastLogin: admin.lastLogin,
       },
     });
@@ -147,7 +149,7 @@ router.get("/check", async (req, res) => {
 router.get("/me", requireAuth, async (req, res) => {
   try {
     const admin = await Admin.findById(req.admin.id).select(
-      "username email role isActive lastLogin"
+      "username email role isActive assignedStation lastLogin"
     );
     if (!admin) {
       return res.status(404).json({ success: false, message: "Admin not found" });
@@ -159,6 +161,7 @@ router.get("/me", requireAuth, async (req, res) => {
         username: admin.username,
         email: admin.email,
         role: normalizeRole(admin.role),
+        assignedStation: admin.assignedStation || "",
         lastLogin: admin.lastLogin,
       },
     });

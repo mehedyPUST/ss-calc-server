@@ -12,6 +12,7 @@ function publicUser(doc) {
     email: o.email || "",
     displayName: o.displayName || "",
     role: normalizeRole(o.role),
+    assignedStation: o.assignedStation || "",
     isActive: o.isActive !== false,
     lastLogin: o.lastLogin || null,
     createdAt: o.createdAt || null,
@@ -22,7 +23,7 @@ function publicUser(doc) {
 router.get("/", requireAdmin, async (_req, res) => {
   try {
     const list = await Admin.find()
-      .select("username email displayName role isActive lastLogin createdAt updatedAt")
+      .select("username email displayName role isActive assignedStation lastLogin createdAt updatedAt")
       .sort({ role: 1, username: 1 })
       .lean();
     res.json({
@@ -37,7 +38,7 @@ router.get("/", requireAdmin, async (_req, res) => {
 
 router.post("/", requireAdmin, async (req, res) => {
   try {
-    const { username, password, email, displayName, role } = req.body || {};
+    const { username, password, email, displayName, role, assignedStation } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ success: false, message: "Username and password are required" });
     }
@@ -46,7 +47,8 @@ router.post("/", requireAdmin, async (req, res) => {
     }
 
     let nextRole = normalizeRole(role || "viewer");
-    if (!["viewer", "duty", "admin"].includes(nextRole)) nextRole = "viewer";
+    if (!["viewer", "duty", "admin", "circle-load-input"].includes(nextRole))
+      nextRole = "viewer";
 
     const exists = await Admin.findOne({
       $or: [
@@ -64,6 +66,7 @@ router.post("/", requireAdmin, async (req, res) => {
       displayName: displayName ? String(displayName).trim() : "",
       role: nextRole,
       isActive: true,
+      assignedStation: assignedStation || "",
     };
     const emailTrim = email != null ? String(email).trim().toLowerCase() : "";
     if (emailTrim) createPayload.email = emailTrim;
@@ -96,6 +99,9 @@ router.patch("/:id", requireAdmin, async (req, res) => {
     }
     if (role != null) {
       user.role = normalizeRole(role);
+    }
+    if (req.body.assignedStation != null) {
+      user.assignedStation = String(req.body.assignedStation || "");
     }
     if (password != null && String(password).length > 0) {
       if (String(password).length < 6) {

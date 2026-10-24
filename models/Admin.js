@@ -31,7 +31,15 @@ const adminSchema = new mongoose.Schema(
      */
     role: {
       type: String,
-      enum: ["viewer", "duty", "admin", "operator", "superadmin", "duty-person"],
+      enum: [
+        "viewer",
+        "duty",
+        "admin",
+        "circle-load-input",
+        "operator",
+        "superadmin",
+        "duty-person",
+      ],
       default: "viewer",
     },
     lastLogin: {
@@ -41,6 +49,15 @@ const adminSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: true,
+    },
+    /**
+     * Circle-load station this user may edit (manual SS).
+     * empty / null = none (unless admin).
+     * bottail is filled from Calculator — still can assign for visibility.
+     */
+    assignedStation: {
+      type: String,
+      default: "",
     },
   },
   { timestamps: true }

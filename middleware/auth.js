@@ -5,8 +5,10 @@ const JWT_EXPIRY = process.env.JWT_EXPIRY || "7d";
 
 /** Normalize legacy roles → viewer | duty | admin */
 function normalizeRole(role) {
-  const r = String(role || "").toLowerCase();
+  const r = String(role || "").toLowerCase().replace(/_/g, "-");
   if (r === "viewer") return "viewer";
+  if (r === "circle-load-input" || r === "circleloadinput" || r === "circle-input")
+    return "circle-load-input";
   if (r === "duty" || r === "duty-person" || r === "operator") return "duty";
   if (r === "admin" || r === "superadmin") return "admin";
   return "viewer";
