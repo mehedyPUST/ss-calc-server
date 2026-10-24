@@ -31,6 +31,20 @@ function payload(doc) {
     bus1MaxKv: Number(lean.bus1MaxKv) || 36,
     bus2MaxKv: Number(lean.bus2MaxKv) || 35.6,
     trashRetentionDays: Number(lean.trashRetentionDays) || 30,
+    circleRelaxedSlots: Array.isArray(lean.circleRelaxedSlots)
+      ? lean.circleRelaxedSlots
+      : [
+          "01:00",
+          "02:00",
+          "03:00",
+          "04:00",
+          "05:00",
+          "06:00",
+          "07:00",
+          "08:00",
+        ],
+    circleRelaxUntil: lean.circleRelaxUntil || "12:00",
+    districtDayBoundary: lean.districtDayBoundary || "22:00",
   };
 }
 

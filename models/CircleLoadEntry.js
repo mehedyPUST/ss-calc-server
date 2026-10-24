@@ -19,6 +19,8 @@ const circleLoadEntrySchema = new mongoose.Schema(
     note: { type: String, default: "" },
     /** calculator | manual */
     source: { type: String, default: "manual" },
+    /** First successful submit — used for 10‑min edit lock */
+    firstSubmittedAt: { type: Date, default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", default: null },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", default: null },
     createdByUsername: { type: String, default: "" },

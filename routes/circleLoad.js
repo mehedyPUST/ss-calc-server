@@ -2,6 +2,7 @@ const express = require("express");
 const CircleLoadEntry = require("../models/CircleLoadEntry");
 const Calculation = require("../models/Calculation");
 const Admin = require("../models/Admin");
+const Settings = require("../models/Settings");
 const {
   requireAuth,
   requireDuty,
@@ -12,8 +13,11 @@ const {
 const {
   CIRCLE_STATIONS,
   isSlotEditable,
-  windowMinutes,
+  isActiveSlot,
   dayKeyDhaka,
+  DEFAULT_RELAXED,
+  editLockState,
+  EDIT_LOCK_MINUTES,
 } = require("../lib/circleStations");
 
 const router = express.Router();
@@ -22,6 +26,13 @@ function toNum(v) {
   if (v === "" || v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+function isRelaxedMsg(hourSlot, opts) {
+  if ((opts.relaxedSlots || []).includes(hourSlot)) {
+    return `Relaxed slot ${hourSlot} is closed after ${opts.relaxUntil} (today)`;
+  }
+  return `Slot ${hourSlot} is closed (open ±50% of time to neighbouring slots)`;
 }
 
 function publicEntry(doc) {
@@ -40,6 +51,7 @@ function publicEntry(doc) {
     pbsLoadshed: o.pbsLoadshed,
     note: o.note || "",
     source: o.source || "manual",
+    firstSubmittedAt: o.firstSubmittedAt || null,
     updatedByUsername: o.updatedByUsername || "",
     updatedAt: o.updatedAt,
   };
@@ -108,8 +120,16 @@ router.get("/sheet", optionalAuth, async (req, res) => {
     const byStation = {};
     for (const r of rows) byStation[r.stationId] = publicEntry(r);
 
-    const editable = isSlotEditable(dayKey, hourSlot);
-    const win = windowMinutes(hourSlot);
+    let settingsDoc = await Settings.findOne({ key: "app" }).lean();
+    const relaxedSlots = settingsDoc?.circleRelaxedSlots?.length
+      ? settingsDoc.circleRelaxedSlots
+      : DEFAULT_RELAXED;
+    const relaxUntil = settingsDoc?.circleRelaxUntil || "12:00";
+    const slotOpts = { relaxedSlots, relaxUntil };
+
+    const editable = isSlotEditable(dayKey, hourSlot, new Date(), slotOpts);
+    const active = isActiveSlot(dayKey, hourSlot);
+    const isRelaxed = relaxedSlots.includes(hourSlot);
 
     const role = normalizeRole(req.admin?.role);
     let assignedStation = "";
@@ -131,6 +151,7 @@ router.get("/sheet", optionalAuth, async (req, res) => {
       return false;
     };
 
+    const now = new Date();
     const sheet = CIRCLE_STATIONS.map((s) => {
       const e = byStation[s.id] || {
         dayKey,
@@ -143,14 +164,21 @@ router.get("/sheet", optionalAuth, async (req, res) => {
         pbsAllotment: null,
         pbsLoadshed: null,
         source: s.source,
+        firstSubmittedAt: null,
       };
       const actual = Number(e.actualLoad) || 0;
       const ls = Number(e.loadshed) || 0;
+      const lock = editLockState(e.firstSubmittedAt, now);
+      const baseCan = canEditStation(s.id);
       return {
         ...s,
         entry: e,
         demand: actual + ls,
-        canEdit: canEditStation(s.id),
+        editLocked: lock.locked,
+        unlockAt: lock.unlockAt,
+        lockRemainingSec: lock.remainingSec,
+        canEdit: baseCan && !lock.locked,
+        canEditBase: baseCan,
       };
     });
 
@@ -172,7 +200,11 @@ router.get("/sheet", optionalAuth, async (req, res) => {
         dayKey,
         hourSlot,
         editable,
-        windowMinutes: win,
+        active,
+        isRelaxed,
+        relaxedSlots,
+        relaxUntil,
+        editLockMinutes: EDIT_LOCK_MINUTES,
         assignedStation,
         role,
         stations: sheet,
@@ -231,10 +263,33 @@ router.post("/entry", requireAuth, async (req, res) => {
       });
     }
 
-    if (!isSlotEditable(dayKey, hourSlot)) {
+    const settingsDoc = await Settings.findOne({ key: "app" }).lean();
+    const slotOpts = {
+      relaxedSlots: settingsDoc?.circleRelaxedSlots?.length
+        ? settingsDoc.circleRelaxedSlots
+        : DEFAULT_RELAXED,
+      relaxUntil: settingsDoc?.circleRelaxUntil || "12:00",
+    };
+    if (!isSlotEditable(dayKey, hourSlot, new Date(), slotOpts)) {
       return res.status(409).json({
         success: false,
-        message: `Slot ${hourSlot} is outside the edit window (±${windowMinutes(hourSlot)} min)`,
+        message: isRelaxedMsg(hourSlot, slotOpts),
+      });
+    }
+
+    const existing = await CircleLoadEntry.findOne({
+      dayKey,
+      hourSlot,
+      stationId,
+    }).lean();
+
+    const lock = editLockState(existing?.firstSubmittedAt);
+    if (lock.locked) {
+      return res.status(423).json({
+        success: false,
+        message: `Edit locked for ${EDIT_LOCK_MINUTES} min after first submit. Try again in ${lock.remainingSec}s.`,
+        unlockAt: lock.unlockAt,
+        remainingSec: lock.remainingSec,
       });
     }
 
@@ -255,6 +310,10 @@ router.post("/entry", requireAuth, async (req, res) => {
       updatedBy: req.admin.id,
       updatedByUsername: req.admin.username || "",
     };
+
+    if (!existing?.firstSubmittedAt) {
+      fields.firstSubmittedAt = new Date();
+    }
 
     const doc = await CircleLoadEntry.findOneAndUpdate(
       { dayKey, hourSlot, stationId },
@@ -278,4 +337,142 @@ router.post("/entry", requireAuth, async (req, res) => {
   }
 });
 
+
+
+/** GET /api/circle-load/district-day?day=YYYY-MM-DD
+ * Operational day labelled as `day` runs from previous calendar day at
+ * districtDayBoundary through `day` at districtDayBoundary (inclusive).
+ * Default boundary 22:00 → prev 22:00 … today 22:00.
+ */
+router.get("/district-day", optionalAuth, async (req, res) => {
+  try {
+    const dayKey = String(req.query.day || dayKeyDhaka()).slice(0, 10);
+    const { SLOT_ORDER } = require("../lib/circleStations");
+
+    let settingsDoc = await Settings.findOne({ key: "app" }).lean();
+    const boundary = settingsDoc?.districtDayBoundary || "22:00";
+    const bm = String(boundary).match(/^(\d{1,2}):(\d{2})$/);
+    const bHour = bm ? Number(bm[1]) : 22;
+    const bMin = bm ? Number(bm[2]) : 0;
+    const boundaryLabel = `${String(bHour).padStart(2, "0")}:${String(bMin).padStart(2, "0")}`;
+
+    // previous calendar day
+    const [Y, M, D] = dayKey.split("-").map(Number);
+    const prevDt = new Date(Date.UTC(Y, M - 1, D - 1));
+    const prevKey = `${prevDt.getUTCFullYear()}-${String(prevDt.getUTCMonth() + 1).padStart(2, "0")}-${String(prevDt.getUTCDate()).padStart(2, "0")}`;
+
+    // Ordered slots: prev day from boundary → end of day, then today 00:00 → boundary (incl.)
+    function slotMinutes(label) {
+      const m = String(label).match(/^(\d{1,2}):(\d{2})$/);
+      if (!m) return 0;
+      return Number(m[1]) * 60 + Number(m[2]);
+    }
+    const bMins = bHour * 60 + bMin;
+
+    const windowSlots = [];
+    // Previous day: slots with time >= boundary
+    for (const s of SLOT_ORDER) {
+      if (slotMinutes(s) >= bMins) {
+        windowSlots.push({ dayKey: prevKey, hourSlot: s });
+      }
+    }
+    // Today: slots with time <= boundary
+    for (const s of SLOT_ORDER) {
+      if (slotMinutes(s) <= bMins) {
+        windowSlots.push({ dayKey, hourSlot: s });
+      }
+    }
+
+    // Sync bottail for involved dayKeys
+    const daysToSync = new Set(windowSlots.map((w) => w.dayKey));
+    for (const dk of daysToSync) {
+      for (const hourSlot of SLOT_ORDER) {
+        try {
+          await pullBottailFromCalculations(dk, hourSlot);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    const rows = await CircleLoadEntry.find({
+      dayKey: { $in: [...daysToSync] },
+      stationId: { $in: ["bottail", "bheramara"] },
+    }).lean();
+
+    const byKey = {};
+    for (const r of rows) {
+      byKey[`${r.dayKey}|${r.stationId}|${r.hourSlot}`] = r;
+    }
+
+    const pick = (dk, stationId, hourSlot) => {
+      const e = byKey[`${dk}|${stationId}|${hourSlot}`];
+      if (!e) {
+        return {
+          consumption: null,
+          loadshed: null,
+          allotment: null,
+          demand: null,
+        };
+      }
+      const consumption =
+        e.actualLoad == null ? null : Number(e.actualLoad);
+      const loadshed = e.loadshed == null ? 0 : Number(e.loadshed);
+      const demand =
+        consumption == null
+          ? null
+          : consumption + (Number.isFinite(loadshed) ? loadshed : 0);
+      let allotment =
+        e.pgcbAllotment == null ? null : Number(e.pgcbAllotment);
+      if (allotment == null && demand != null) allotment = demand;
+      return { consumption, loadshed, allotment, demand };
+    };
+
+    const slots = windowSlots.map(({ dayKey: dk, hourSlot }) => {
+      const bottail = pick(dk, "bottail", hourSlot);
+      const bheramara = pick(dk, "bheramara", hourSlot);
+      const sum = (a, b) => {
+        if (a == null && b == null) return null;
+        return (Number(a) || 0) + (Number(b) || 0);
+      };
+      const total = {
+        consumption: sum(bottail.consumption, bheramara.consumption),
+        loadshed: sum(bottail.loadshed, bheramara.loadshed),
+        allotment: sum(bottail.allotment, bheramara.allotment),
+        demand: sum(bottail.demand, bheramara.demand),
+      };
+      return {
+        dayKey: dk,
+        hourSlot,
+        /** true when this row belongs to the previous calendar day */
+        isPreviousDay: dk === prevKey,
+        bottail,
+        bheramara,
+        total,
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        dayKey,
+        prevDayKey: prevKey,
+        boundary: boundaryLabel,
+        rangeLabel: `${prevKey} ${boundaryLabel} → ${dayKey} ${boundaryLabel}`,
+        district: "Kushtia",
+        stations: ["bottail", "bheramara"],
+        slots,
+      },
+    });
+  } catch (err) {
+    console.error("district-day:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message || "Failed to load district load",
+    });
+  }
+});
+
 module.exports = router;
+
+
