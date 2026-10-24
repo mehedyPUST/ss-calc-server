@@ -1,6 +1,6 @@
 const express = require("express");
 const Admin = require("../models/Admin");
-const { generateToken, requireAuth, getTokenFromRequest } = require("../middleware/auth");
+const { generateToken, requireAuth, getTokenFromRequest, normalizeRole } = require("../middleware/auth");
 const jwt = require("jsonwebtoken");
 
 const router = express.Router();
@@ -44,9 +44,11 @@ router.post("/login", async (req, res) => {
     }
 
     if (admin.isActive === false) {
-      return res.status(401).json({
+      return res.status(403).json({
         success: false,
-        message: "Account is deactivated. Contact administrator.",
+        message:
+          "You are blocked by the site admin. Please contact Bottail SS.",
+        blocked: true,
       });
     }
 
@@ -74,7 +76,7 @@ router.post("/login", async (req, res) => {
         id: admin._id,
         username: admin.username,
         email: admin.email,
-        role: admin.role,
+        role: normalizeRole(admin.role),
         lastLogin: admin.lastLogin,
       },
     });
@@ -113,8 +115,17 @@ router.get("/check", async (req, res) => {
     const admin = await Admin.findById(decoded.id).select(
       "username email role isActive lastLogin"
     );
-    if (!admin || admin.isActive === false) {
+    if (!admin) {
       return res.json({ success: true, authenticated: false });
+    }
+    if (admin.isActive === false) {
+      return res.json({
+        success: true,
+        authenticated: false,
+        blocked: true,
+        message:
+          "You are blocked by the site admin. Please contact Bottail SS.",
+      });
     }
     res.json({
       success: true,
@@ -123,7 +134,7 @@ router.get("/check", async (req, res) => {
         id: admin._id,
         username: admin.username,
         email: admin.email,
-        role: admin.role,
+        role: normalizeRole(admin.role),
         lastLogin: admin.lastLogin,
       },
     });
@@ -147,7 +158,7 @@ router.get("/me", requireAuth, async (req, res) => {
         id: admin._id,
         username: admin.username,
         email: admin.email,
-        role: admin.role,
+        role: normalizeRole(admin.role),
         lastLogin: admin.lastLogin,
       },
     });
@@ -206,7 +217,7 @@ router.post("/register", async (req, res) => {
     const admin = await Admin.create({
       username: String(username).trim(),
       password,
-      email: email ? String(email).trim().toLowerCase() : undefined,
+      email: email && String(email).trim() ? String(email).trim().toLowerCase() : undefined,
       role: count === 0 ? "superadmin" : "admin",
       isActive: true,
     });
@@ -218,7 +229,7 @@ router.post("/register", async (req, res) => {
         id: admin._id,
         username: admin.username,
         email: admin.email,
-        role: admin.role,
+        role: normalizeRole(admin.role),
       },
     });
   } catch (error) {

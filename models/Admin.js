@@ -15,15 +15,24 @@ const adminSchema = new mongoose.Schema(
     },
     email: {
       type: String,
-      unique: true,
-      sparse: true,
       trim: true,
       lowercase: true,
+      default: undefined,
     },
+    displayName: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    /**
+     * viewer — view only (home, calculator, history, max load, statistics)
+     * duty — full operational pages except admin; can save
+     * admin — settings, users, see who saved data
+     */
     role: {
       type: String,
-      enum: ["admin", "superadmin"],
-      default: "admin",
+      enum: ["viewer", "duty", "admin", "operator", "superadmin", "duty-person"],
+      default: "viewer",
     },
     lastLogin: {
       type: Date,
@@ -37,7 +46,19 @@ const adminSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Sparse unique: multiple docs may omit email; only non-null emails must be unique
+adminSchema.index(
+  { email: 1 },
+  { unique: true, sparse: true, name: "email_1_sparse" }
+);
+
 adminSchema.pre("save", async function (next) {
+  // Never persist empty string / null email (breaks unique index on null)
+  if (this.email == null || String(this.email).trim() === "") {
+    this.email = undefined;
+    this.set("email", undefined);
+  }
+
   if (!this.isModified("password")) return next();
   try {
     const salt = await bcrypt.genSalt(10);

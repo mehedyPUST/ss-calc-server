@@ -1,7 +1,7 @@
 // backend/routes/calculations.js
 const express = require("express");
 const Calculation = require("../models/Calculation");
-const { requireAuth, requireAdmin, optionalAuth } = require("../middleware/auth");
+const { requireAuth, requireDuty, requireAdmin, optionalAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -16,7 +16,7 @@ async function purgeExpiredTrash() {
 }
 
 // POST /api/calculations - Requires authentication
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", requireDuty, async (req, res) => {
   try {
     const { busVoltages, feeders, bottail11kV, totalMW, note, action, ids } = req.body;
 
@@ -149,7 +149,10 @@ router.post("/", requireAuth, async (req, res) => {
       isHourly,
       hasActiveRing,
       deletedAt: null,
-      createdBy: req.adminId,
+      createdBy: req.admin?.id || req.adminId || null,
+      updatedBy: req.admin?.id || req.adminId || null,
+      createdByUsername: req.admin?.username || "",
+      updatedByUsername: req.admin?.username || "",
     };
 
     // Replace existing same-day / same-slot record when requested
@@ -737,7 +740,7 @@ router.get("/:id", optionalAuth, async (req, res) => {
 });
 
 // DELETE /api/calculations/:id - Requires authentication
-router.delete("/:id", requireAuth, async (req, res) => {
+router.delete("/:id", requireDuty, async (req, res) => {
   try {
     await purgeExpiredTrash();
     const { id } = req.params;
@@ -801,7 +804,7 @@ router.delete("/:id", requireAuth, async (req, res) => {
 // PATCH /api/calculations/:id
 // - { action: 'restore' } → restore from trash
 // - calculation fields → full update of active record
-router.patch("/:id", requireAuth, async (req, res) => {
+router.patch("/:id", requireDuty, async (req, res) => {
   try {
     await purgeExpiredTrash();
     const { id } = req.params;
@@ -873,6 +876,8 @@ router.patch("/:id", requireAuth, async (req, res) => {
       totalMW: Number(totalMW) || 0,
       allotment: allotmentVal,
       hasActiveRing: normalizedFeeders.some((f) => f.ringActive === true),
+      updatedBy: req.admin?.id || req.adminId || null,
+      updatedByUsername: req.admin?.username || "",
     };
     if (note != null) fields.note = String(note);
 

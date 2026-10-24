@@ -39,6 +39,14 @@ const calculationSchema = new mongoose.Schema(
       ref: "Admin",
       default: null,
     },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Admin",
+      default: null,
+    },
+    /** Denormalized for list UI without populate */
+    createdByUsername: { type: String, default: "" },
+    updatedByUsername: { type: String, default: "" },
   },
   { timestamps: true }
 );

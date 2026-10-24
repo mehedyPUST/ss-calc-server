@@ -5,6 +5,8 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const mongoose = require("mongoose");
 const calculationsRouter = require("../routes/calculations");
+const settingsRouter = require("../routes/settings");
+const adminUsersRouter = require("../routes/adminUsers");
 const authRouter = require("../routes/auth");
 
 const app = express();
@@ -106,6 +108,8 @@ app.get("/api/health", async (req, res) => {
 
 app.use("/api/auth", authRouter);
 app.use("/api/calculations", calculationsRouter);
+app.use("/api/settings", settingsRouter);
+app.use("/api/admin/users", adminUsersRouter);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, message: "Route not found" });
