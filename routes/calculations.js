@@ -5,14 +5,31 @@ const { requireAuth, requireDuty, requireAdmin, optionalAuth } = require("../mid
 
 const router = express.Router();
 
-// Auto-purge disabled — retain soft-deleted records until user permanently deletes
 const activeFilter = {
   $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
 };
 const trashFilter = { deletedAt: { $ne: null } };
 
+/** Permanently remove soft-deleted records older than trashRetentionDays (default 30). */
 async function purgeExpiredTrash() {
-  return 0;
+  try {
+    const Settings = require("../models/Settings");
+    const doc = await Settings.findOne({ key: "app" }).select("trashRetentionDays").lean();
+    const days = Number(doc?.trashRetentionDays);
+    const retentionDays = Number.isFinite(days) && days > 0 ? days : 30;
+    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+    const result = await Calculation.deleteMany({
+      deletedAt: { $ne: null, $lt: cutoff },
+    });
+    return result.deletedCount || 0;
+  } catch (err) {
+    console.error("purgeExpiredTrash:", err.message);
+    return 0;
+  }
+}
+
+function clientError(err) {
+  return process.env.NODE_ENV === "production" ? undefined : err?.message;
 }
 
 // POST /api/calculations - Requires authentication
@@ -61,6 +78,12 @@ router.post("/", requireDuty, async (req, res) => {
       }
 
       if (action === "purge") {
+        if (req.admin?.role !== "admin") {
+          return res.status(403).json({
+            success: false,
+            message: "Admin access required to permanently delete",
+          });
+        }
         const result = await Calculation.deleteMany({
           _id: { $in: uniqueIds },
           deletedAt: { $ne: null },
@@ -73,6 +96,12 @@ router.post("/", requireDuty, async (req, res) => {
       }
 
       if (action === "empty_trash") {
+        if (req.admin?.role !== "admin") {
+          return res.status(403).json({
+            success: false,
+            message: "Admin access required to empty trash",
+          });
+        }
         await purgeExpiredTrash();
         const result = await Calculation.deleteMany(trashFilter);
         return res.json({
@@ -191,7 +220,7 @@ router.post("/", requireDuty, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to save calculation",
-      error: err.message,
+      error: clientError(err),
     });
   }
 });
@@ -249,7 +278,7 @@ router.get("/slot-check", optionalAuth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to check slot",
-      error: err.message,
+      error: clientError(err),
     });
   }
 });
@@ -356,7 +385,7 @@ router.get("/", optionalAuth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch calculations",
-      error: err.message,
+      error: clientError(err),
     });
   }
 });
@@ -658,7 +687,7 @@ router.get("/max-load", optionalAuth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to compute max load",
-      error: err.message,
+      error: clientError(err),
     });
   }
 });
@@ -667,7 +696,7 @@ router.get("/max-load", optionalAuth, async (req, res) => {
 
 // ── App settings (ring mode preference) ─────────────────────────────────────
 // Mounted at /api/calculations/settings so it works when only this router is updated.
-router.get("/settings", async (_req, res) => {
+router.get("/settings", optionalAuth, async (_req, res) => {
   try {
     const Settings = require("../models/Settings");
     let doc = await Settings.findOne({ key: "app" }).lean();
@@ -686,12 +715,12 @@ router.get("/settings", async (_req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to load settings",
-      error: err.message,
+      error: clientError(err),
     });
   }
 });
 
-router.patch("/settings", async (req, res) => {
+router.patch("/settings", requireAdmin, async (req, res) => {
   try {
     const Settings = require("../models/Settings");
     let mode = String(req.body?.maxLoadRingMode || "").toLowerCase();
@@ -717,7 +746,7 @@ router.patch("/settings", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to save settings",
-      error: err.message,
+      error: clientError(err),
     });
   }
 });
@@ -734,7 +763,7 @@ router.get("/:id", optionalAuth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch calculation",
-      error: err.message,
+      error: clientError(err),
     });
   }
 });
@@ -747,6 +776,12 @@ router.delete("/:id", requireDuty, async (req, res) => {
     const permanent = req.query.permanent === "1" || req.query.permanent === "true";
 
     if (permanent) {
+      if (req.admin?.role !== "admin") {
+        return res.status(403).json({
+          success: false,
+          message: "Admin access required to permanently delete",
+        });
+      }
       const doc = await Calculation.findOneAndDelete({
         _id: id,
         deletedAt: { $ne: null },
@@ -796,7 +831,7 @@ router.delete("/:id", requireDuty, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to delete",
-      error: err.message,
+      error: clientError(err),
     });
   }
 });
@@ -916,7 +951,7 @@ router.patch("/:id", requireDuty, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to restore",
-      error: err.message,
+      error: clientError(err),
     });
   }
 });

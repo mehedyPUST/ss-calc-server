@@ -65,7 +65,7 @@ router.get("/", optionalAuth, async (_req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to load settings",
-      error: err.message,
+      error: process.env.NODE_ENV === "production" ? undefined : err.message,
     });
   }
 });
@@ -148,7 +148,7 @@ router.patch("/", requireAdmin, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to save settings",
-      error: err.message,
+      error: process.env.NODE_ENV === "production" ? undefined : err.message,
     });
   }
 });

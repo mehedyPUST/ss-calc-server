@@ -1,7 +1,17 @@
 const jwt = require("jsonwebtoken");
 
-const JWT_SECRET = process.env.JWT_SECRET || "dev-only-change-me";
+const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRY = process.env.JWT_EXPIRY || "7d";
+
+if (!JWT_SECRET) {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("JWT_SECRET environment variable is required in production");
+  }
+  console.warn(
+    "[auth] JWT_SECRET is not set — using insecure dev fallback. Set JWT_SECRET before deploying."
+  );
+}
+const EFFECTIVE_JWT_SECRET = JWT_SECRET || "dev-only-change-me";
 
 /** Normalize legacy roles → viewer | duty | admin */
 function normalizeRole(role) {
@@ -17,7 +27,7 @@ function normalizeRole(role) {
 function generateToken(adminId, username, role) {
   return jwt.sign(
     { id: String(adminId), username, role: normalizeRole(role) },
-    JWT_SECRET,
+    EFFECTIVE_JWT_SECRET,
     { expiresIn: JWT_EXPIRY }
   );
 }
@@ -50,7 +60,7 @@ function requireAuth(req, res, next) {
         message: "Authentication required. Please log in.",
       });
     }
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, EFFECTIVE_JWT_SECRET);
     req.admin = attachAdmin(decoded);
     req.adminId = req.admin.id;
     next();
@@ -92,7 +102,7 @@ function optionalAuth(req, res, next) {
   try {
     const token = getTokenFromRequest(req);
     if (token) {
-      const decoded = jwt.verify(token, JWT_SECRET);
+      const decoded = jwt.verify(token, EFFECTIVE_JWT_SECRET);
       req.admin = attachAdmin(decoded);
       req.adminId = req.admin.id;
     }

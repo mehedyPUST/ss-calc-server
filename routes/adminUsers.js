@@ -32,7 +32,7 @@ router.get("/", requireAdmin, async (_req, res) => {
       count: list.length,
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message || "Failed to list users" });
+    res.status(500).json({ success: false, message: process.env.NODE_ENV === "production" ? "Failed to list users" : (err.message || "Failed to list users") });
   }
 });
 
@@ -42,8 +42,8 @@ router.post("/", requireAdmin, async (req, res) => {
     if (!username || !password) {
       return res.status(400).json({ success: false, message: "Username and password are required" });
     }
-    if (String(password).length < 6) {
-      return res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
+    if (String(password).length < 8) {
+      return res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
     }
 
     let nextRole = normalizeRole(role || "viewer");
@@ -75,7 +75,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
     res.status(201).json({ success: true, message: "User created", data: publicUser(user) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message || "Failed to create user" });
+    res.status(500).json({ success: false, message: process.env.NODE_ENV === "production" ? "Failed to create user" : (err.message || "Failed to create user") });
   }
 });
 
@@ -104,15 +104,15 @@ router.patch("/:id", requireAdmin, async (req, res) => {
       user.assignedStation = String(req.body.assignedStation || "");
     }
     if (password != null && String(password).length > 0) {
-      if (String(password).length < 6) {
-        return res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
+      if (String(password).length < 8) {
+        return res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
       }
       user.password = String(password);
     }
     await user.save();
     res.json({ success: true, message: "User updated", data: publicUser(user) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message || "Failed to update user" });
+    res.status(500).json({ success: false, message: process.env.NODE_ENV === "production" ? "Failed to update user" : (err.message || "Failed to update user") });
   }
 });
 
@@ -125,7 +125,7 @@ router.delete("/:id", requireAdmin, async (req, res) => {
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
     res.json({ success: true, message: "User deleted" });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message || "Failed to delete user" });
+    res.status(500).json({ success: false, message: process.env.NODE_ENV === "production" ? "Failed to delete user" : (err.message || "Failed to delete user") });
   }
 });
 

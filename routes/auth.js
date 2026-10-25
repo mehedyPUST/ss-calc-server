@@ -5,6 +5,31 @@ const jwt = require("jsonwebtoken");
 
 const router = express.Router();
 
+const MIN_PASSWORD_LENGTH = 8;
+
+/** Simple in-memory rate limit: max attempts per key per window. */
+const rateBuckets = new Map();
+function rateLimit(key, maxAttempts = 10, windowMs = 15 * 60 * 1000) {
+  const now = Date.now();
+  let entry = rateBuckets.get(key);
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 0, resetAt: now + windowMs };
+    rateBuckets.set(key, entry);
+  }
+  entry.count += 1;
+  if (entry.count > maxAttempts) {
+    return {
+      limited: true,
+      retryAfterSec: Math.ceil((entry.resetAt - now) / 1000),
+    };
+  }
+  return { limited: false };
+}
+
+function clientError(err) {
+  return process.env.NODE_ENV === "production" ? undefined : err?.message;
+}
+
 function cookieOptions() {
   const isProd = process.env.NODE_ENV === "production";
   // Cross-site cookie (frontend on *.vercel.app, API on another host)
@@ -21,6 +46,15 @@ function cookieOptions() {
 router.post("/login", async (req, res) => {
   try {
     const { username, password } = req.body || {};
+    const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
+    const limitKey = `login:${ip}:${String(username || "").trim().toLowerCase()}`;
+    const rl = rateLimit(limitKey, 10, 15 * 60 * 1000);
+    if (rl.limited) {
+      return res.status(429).json({
+        success: false,
+        message: `Too many login attempts. Try again in ${rl.retryAfterSec}s.`,
+      });
+    }
 
     if (!username || !password) {
       return res.status(400).json({
@@ -86,7 +120,7 @@ router.post("/login", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Login failed",
-      error: error.message,
+      error: clientError(error),
     });
   }
 });
@@ -111,7 +145,7 @@ router.get("/check", async (req, res) => {
     }
     const decoded = jwt.verify(
       token,
-      process.env.JWT_SECRET || "dev-only-change-me"
+      process.env.JWT_SECRET || (process.env.NODE_ENV === "production" ? undefined : "dev-only-change-me")
     );
     const admin = await Admin.findById(decoded.id).select(
       "username email role isActive assignedStation lastLogin"
@@ -169,7 +203,7 @@ router.get("/me", requireAuth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to load profile",
-      error: error.message,
+      error: clientError(error),
     });
   }
 });
@@ -186,10 +220,19 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    if (password.length < 6) {
+    if (String(password).length < MIN_PASSWORD_LENGTH) {
       return res.status(400).json({
         success: false,
-        message: "Password must be at least 6 characters",
+        message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+      });
+    }
+
+    const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
+    const rl = rateLimit(`register:${ip}`, 5, 60 * 60 * 1000);
+    if (rl.limited) {
+      return res.status(429).json({
+        success: false,
+        message: `Too many registration attempts. Try again in ${rl.retryAfterSec}s.`,
       });
     }
 
@@ -240,7 +283,7 @@ router.post("/register", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Registration failed",
-      error: error.message,
+      error: clientError(error),
     });
   }
 });

@@ -213,7 +213,7 @@ router.get("/sheet", optionalAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("circle sheet:", err);
-    res.status(500).json({ success: false, message: err.message || "Failed" });
+    res.status(500).json({ success: false, message: process.env.NODE_ENV === "production" ? "Request failed" : (err.message || "Failed") });
   }
 });
 
@@ -333,7 +333,7 @@ router.post("/entry", requireAuth, async (req, res) => {
     res.json({ success: true, message: "Saved", data: publicEntry(doc) });
   } catch (err) {
     console.error("circle entry:", err);
-    res.status(500).json({ success: false, message: err.message || "Failed" });
+    res.status(500).json({ success: false, message: process.env.NODE_ENV === "production" ? "Request failed" : (err.message || "Failed") });
   }
 });
 
@@ -468,7 +468,7 @@ router.get("/district-day", optionalAuth, async (req, res) => {
     console.error("district-day:", err);
     res.status(500).json({
       success: false,
-      message: err.message || "Failed to load district load",
+      message: process.env.NODE_ENV === "production" ? "Failed to load district load" : (err.message || "Failed to load district load"),
     });
   }
 });
