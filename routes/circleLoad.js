@@ -99,6 +99,87 @@ async function pullBottailFromCalculations(dayKey, hourSlot) {
   return entry;
 }
 
+/**
+ * Batch-sync Bottail from calculator for multiple calendar days.
+ * One query + parallel upserts instead of N sequential find+update pairs.
+ */
+async function pullBottailForDays(dayKeys) {
+  const keys = [...new Set((dayKeys || []).filter(Boolean))];
+  if (keys.length === 0) return;
+
+  const ranges = keys.map((dayKey) => ({
+    dayKey,
+    start: new Date(`${dayKey}T00:00:00+06:00`),
+    end: new Date(`${dayKey}T24:00:00+06:00`),
+  }));
+
+  const docs = await Calculation.find({
+    hourSlot: { $ne: null, $exists: true },
+    $and: [
+      { $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }] },
+      {
+        $or: ranges.map((r) => ({
+          calculatedAt: { $gte: r.start, $lt: r.end },
+        })),
+      },
+    ],
+  })
+    .sort({ calculatedAt: -1 })
+    .select("hourSlot calculatedAt totalMW note updatedByUsername createdByUsername")
+    .lean();
+
+  // Latest calculation per dayKey|hourSlot
+  const best = new Map();
+  for (const c of docs) {
+    const slot = String(c.hourSlot || "").trim();
+    if (!slot) continue;
+    const t = c.calculatedAt ? new Date(c.calculatedAt).getTime() : 0;
+    let dayKey = null;
+    for (const r of ranges) {
+      if (t >= r.start.getTime() && t < r.end.getTime()) {
+        dayKey = r.dayKey;
+        break;
+      }
+    }
+    if (!dayKey) continue;
+    const k = `${dayKey}|${slot}`;
+    if (!best.has(k)) best.set(k, c);
+  }
+
+  const ops = [];
+  for (const [k, c] of best) {
+    const [dayKey, hourSlot] = k.split("|");
+    const total = Number(c.totalMW);
+    if (!Number.isFinite(total)) continue;
+    ops.push(
+      CircleLoadEntry.findOneAndUpdate(
+        { dayKey, hourSlot, stationId: "bottail" },
+        {
+          $set: {
+            actualLoad: total,
+            source: "calculator",
+            note: c.note || "From Bottail calculator",
+            updatedByUsername:
+              c.updatedByUsername || c.createdByUsername || "",
+          },
+          $setOnInsert: {
+            dayKey,
+            hourSlot,
+            stationId: "bottail",
+            pgcbAllotment: null,
+            loadshed: null,
+            pbsLoad: null,
+            pbsAllotment: null,
+            pbsLoadshed: null,
+          },
+        },
+        { upsert: true }
+      )
+    );
+  }
+  if (ops.length) await Promise.all(ops);
+}
+
 /** GET /api/circle-load/stations */
 router.get("/stations", optionalAuth, (_req, res) => {
   res.json({ success: true, data: CIRCLE_STATIONS });
@@ -346,7 +427,14 @@ router.post("/entry", requireAuth, async (req, res) => {
  */
 router.get("/district-day", optionalAuth, async (req, res) => {
   try {
-    const dayKey = String(req.query.day || dayKeyDhaka()).slice(0, 10);
+    let dayKey = String(req.query.day || dayKeyDhaka()).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) {
+      return res.status(400).json({ success: false, message: "Invalid day" });
+    }
+    // No future operational days
+    const todayKey = dayKeyDhaka();
+    if (dayKey > todayKey) dayKey = todayKey;
+
     const { SLOT_ORDER } = require("../lib/circleStations");
 
     let settingsDoc = await Settings.findOne({ key: "app" }).lean();
@@ -383,20 +471,16 @@ router.get("/district-day", optionalAuth, async (req, res) => {
       }
     }
 
-    // Sync bottail for involved dayKeys
-    const daysToSync = new Set(windowSlots.map((w) => w.dayKey));
-    for (const dk of daysToSync) {
-      for (const hourSlot of SLOT_ORDER) {
-        try {
-          await pullBottailFromCalculations(dk, hourSlot);
-        } catch {
-          /* ignore */
-        }
-      }
+    // Sync bottail for involved dayKeys (one batch query, not N sequential)
+    const daysToSync = [...new Set(windowSlots.map((w) => w.dayKey))];
+    try {
+      await pullBottailForDays(daysToSync);
+    } catch (syncErr) {
+      console.warn("district-day bottail sync:", syncErr.message);
     }
 
     const rows = await CircleLoadEntry.find({
-      dayKey: { $in: [...daysToSync] },
+      dayKey: { $in: daysToSync },
       stationId: { $in: ["bottail", "bheramara"] },
     }).lean();
 
