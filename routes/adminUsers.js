@@ -24,12 +24,19 @@ router.get("/", requireAdmin, async (_req, res) => {
   try {
     const list = await Admin.find()
       .select("username email displayName role isActive assignedStation lastLogin createdAt updatedAt")
-      .sort({ role: 1, username: 1 })
+      .sort({ username: 1 })
       .lean();
+    // All roles (viewer, duty, admin, circle-load-input, legacy operator/duty-person)
+    const data = list.map((u) => publicUser(u));
     res.json({
       success: true,
-      data: list.map((u) => publicUser(u)),
-      count: list.length,
+      data,
+      count: data.length,
+      byRole: data.reduce((acc, u) => {
+        const r = u.role || "viewer";
+        acc[r] = (acc[r] || 0) + 1;
+        return acc;
+      }, {}),
     });
   } catch (err) {
     res.status(500).json({ success: false, message: process.env.NODE_ENV === "production" ? "Failed to list users" : (err.message || "Failed to list users") });
@@ -50,8 +57,17 @@ router.post("/", requireAdmin, async (req, res) => {
     if (!["viewer", "duty", "admin", "circle-load-input"].includes(nextRole))
       nextRole = "viewer";
 
+    const uname = String(username).trim().toLowerCase();
+    if (!/^[a-z0-9._-]{3,32}$/.test(uname)) {
+      return res.status(400).json({
+        success: false,
+        message: "Username: 3–32 chars, lowercase letters, numbers, . _ -",
+      });
+    }
+
     const exists = await Admin.findOne({
       $or: [
+        { username: uname },
         { username: String(username).trim() },
         ...(email ? [{ email: String(email).trim().toLowerCase() }] : []),
       ],
@@ -61,12 +77,12 @@ router.post("/", requireAdmin, async (req, res) => {
     }
 
     const createPayload = {
-      username: String(username).trim(),
+      username: uname,
       password: String(password),
       displayName: displayName ? String(displayName).trim() : "",
       role: nextRole,
       isActive: true,
-      assignedStation: assignedStation || "",
+      assignedStation: nextRole === "circle-load-input" ? String(assignedStation || "").trim() : "",
     };
     const emailTrim = email != null ? String(email).trim().toLowerCase() : "";
     if (emailTrim) createPayload.email = emailTrim;

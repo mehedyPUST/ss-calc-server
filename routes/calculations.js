@@ -501,9 +501,21 @@ router.get("/max-load", optionalAuth, async (req, res) => {
       andParts.push(dateMatchServer);
     }
 
-    // ringMode: without = no ring only; with/all = all records (default with)
+    /**
+     * ringMode for per-feeder MAX (incl. H-3 / T-3):
+     * - without: only samples with no ring/coupler ON.
+     *   H-3 max = H-3 feeding its own 11 kV feeders only (not via bus coupler).
+     *   T-3 max = T-3 feeding its own 11 kV feeders only.
+     *   Same rule for Mozompur↔Housing↔Campus/GIS (no direct Mozompur↔GIS) and external rings.
+     * - with: include ring/coupler samples (individual peaks may be shared-bus).
+     *
+     * Station total MW peak and Bottail 11 kV (H3+T3) peak always use ALL
+     * samples in range — combined 11 kV load must count even under coupler.
+     */
     let ringMode = String(req.query.ringMode || "with").toLowerCase();
     if (!["without", "with", "all"].includes(ringMode)) ringMode = "with";
+    let peakBy = String(req.query.peakBy || "mw").toLowerCase();
+    if (!["mw", "amps"].includes(peakBy)) peakBy = "mw";
     if (ringMode === "without") {
       andParts.push({
         $and: [
@@ -541,7 +553,11 @@ router.get("/max-load", optionalAuth, async (req, res) => {
           eventAt: { $ifNull: ["$calculatedAt", "$createdAt"] },
         },
       },
-      { $sort: { "feeders.mw": -1, eventAt: 1 } },
+      {
+        $sort: peakBy === "amps"
+          ? { "feeders.amps": -1, "feeders.mw": -1, eventAt: 1 }
+          : { "feeders.mw": -1, "feeders.amps": -1, eventAt: 1 },
+      },
       {
         $group: {
           _id: "$feeders.id",
@@ -608,7 +624,7 @@ router.get("/max-load", optionalAuth, async (req, res) => {
     ]);
 
     const bottail11Peaks = await Calculation.aggregate([
-      { $match: baseMatch },
+      { $match: stationPeakMatch },
       { $addFields: { eventAt: { $ifNull: ["$calculatedAt", "$createdAt"] } } },
       { $sort: { bottail11kV: -1, eventAt: 1 } },
       { $limit: 5 },
@@ -645,6 +661,7 @@ router.get("/max-load", optionalAuth, async (req, res) => {
       range,
       label,
       ringMode,
+      peakBy,
       year,
       month,
       start: start ? start.toISOString() : null,
